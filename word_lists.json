@@ -1,0 +1,286 @@
+{
+  "swear_words": [
+    "wanker",
+    "fuck",
+    "fucking",
+    "damn",
+    "dickhead",
+    "balls",
+    "cunt",
+    "bitch",
+    "shit",
+    "ass",
+    "asshole",
+    "motherfucker"
+  ],
+  "vegetables": [
+    {
+      "word": "leek",
+      "syllables": 1
+    },
+    {
+      "word": "mustard greens",
+      "syllables": 3
+    },
+    {
+      "word": "bell pepper",
+      "syllables": 3
+    },
+    {
+      "word": "delicata squash",
+      "syllables": 5
+    },
+    {
+      "word": "corn",
+      "syllables": 1
+    },
+    {
+      "word": "arugula",
+      "syllables": 4
+    },
+    {
+      "word": "swiss chard",
+      "syllables": 2
+    },
+    {
+      "word": "spaghetti squash",
+      "syllables": 4
+    },
+    {
+      "word": "carrot",
+      "syllables": 2
+    },
+    {
+      "word": "lotus root",
+      "syllables": 3
+    },
+    {
+      "word": "shallot",
+      "syllables": 2
+    },
+    {
+      "word": "fava beans",
+      "syllables": 3
+    },
+    {
+      "word": "sprouts",
+      "syllables": 1
+    },
+    {
+      "word": "peas",
+      "syllables": 1
+    },
+    {
+      "word": "ginger",
+      "syllables": 2
+    },
+    {
+      "word": "watercress",
+      "syllables": 3
+    },
+    {
+      "word": "water chestnut",
+      "syllables": 4
+    },
+    {
+      "word": "yam",
+      "syllables": 1
+    },
+    {
+      "word": "iceberg lettuce",
+      "syllables": 5
+    },
+    {
+      "word": "taro",
+      "syllables": 2
+    },
+    {
+      "word": "scallions",
+      "syllables": 2
+    },
+    {
+      "word": "hickama",
+      "syllables": 3
+    },
+    {
+      "word": "cabbage",
+      "syllables": 2
+    },
+    {
+      "word": "green beans",
+      "syllables": 2
+    },
+    {
+      "word": "fenugreek",
+      "syllables": 3
+    },
+    {
+      "word": "beet greens",
+      "syllables": 2
+    },
+    {
+      "word": "bitter melon",
+      "syllables": 4
+    },
+    {
+      "word": "garlic chives",
+      "syllables": 4
+    },
+    {
+      "word": "celery",
+      "syllables": 3
+    },
+    {
+      "word": "brussels sprouts",
+      "syllables": 3
+    },
+    {
+      "word": "chard",
+      "syllables": 1
+    },
+    {
+      "word": "sweet potato",
+      "syllables": 4
+    },
+    {
+      "word": "parsnip",
+      "syllables": 2
+    },
+    {
+      "word": "daikon",
+      "syllables": 2
+    },
+    {
+      "word": "bock choy",
+      "syllables": 2
+    },
+    {
+      "word": "water spinach",
+      "syllables": 4
+    },
+    {
+      "word": "yucca",
+      "syllables": 2
+    },
+    {
+      "word": "broccolini",
+      "syllables": 4
+    },
+    {
+      "word": "onion",
+      "syllables": 2
+    },
+    {
+      "word": "kale",
+      "syllables": 1
+    },
+    {
+      "word": "garlic",
+      "syllables": 2
+    },
+    {
+      "word": "butternut squash",
+      "syllables": 4
+    },
+    {
+      "word": "lettuce",
+      "syllables": 2
+    },
+    {
+      "word": "artichoke",
+      "syllables": 3
+    },
+    {
+      "word": "bamboo shoots",
+      "syllables": 3
+    },
+    {
+      "word": "tomato",
+      "syllables": 3
+    },
+    {
+      "word": "beet",
+      "syllables": 1
+    },
+    {
+      "word": "radish",
+      "syllables": 2
+    },
+    {
+      "word": "cauliflower",
+      "syllables": 4
+    },
+    {
+      "word": "pumpkin",
+      "syllables": 2
+    },
+    {
+      "word": "fennel",
+      "syllables": 2
+    },
+    {
+      "word": "pea shoots",
+      "syllables": 2
+    },
+    {
+      "word": "pea",
+      "syllables": 1
+    },
+    {
+      "word": "zucchini",
+      "syllables": 3
+    },
+    {
+      "word": "green onion",
+      "syllables": 3
+    },
+    {
+      "word": "turnip",
+      "syllables": 2
+    },
+    {
+      "word": "broccoli",
+      "syllables": 3
+    },
+    {
+      "word": "cucumber",
+      "syllables": 3
+    },
+    {
+      "word": "okra",
+      "syllables": 2
+    },
+    {
+      "word": "rhubarb",
+      "syllables": 2
+    },
+    {
+      "word": "sorrel",
+      "syllables": 2
+    },
+    {
+      "word": "eggplant",
+      "syllables": 2
+    },
+    {
+      "word": "collard greens",
+      "syllables": 3
+    },
+    {
+      "word": "potato",
+      "syllables": 3
+    },
+    {
+      "word": "napa cabbage",
+      "syllables": 4
+    },
+    {
+      "word": "yellow squash",
+      "syllables": 3
+    },
+    {
+      "word": "chayote",
+      "syllables": 1
+    }
+  ]
+}
