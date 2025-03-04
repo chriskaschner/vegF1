@@ -9,11 +9,7 @@ import whisperx
 import random
 import tempfile
 import openai
-# from pydub import AudioSegment
-# from pydub.effects import speedup
-# import librosa
-# import numpy as np
-from audio_processor import replace_audio_segments # , time_stretch_audio
+from audio_processor import replace_audio_segments
 import argparse
 
 
@@ -181,16 +177,18 @@ def get_syllable_count(word):
     """For swear words, we calculate the syllable count on the fly using syllapy."""
     return syllapy.count(word)
 
-def get_vegetable_replacement(target_duration, cache_file="tts_cache/tts_cache.json"):
+def get_vegetable_replacement(target_duration, cache_file="tts_cache/tts_cache.json", recent_used_limit=5):
     """
-    Selects a cached TTS vegetable word that closely matches the target duration.
-
-    - Finds 3 words closest in duration.
-    - Randomly picks from them for variation.
+    Selects a cached TTS vegetable with improved variety and matching.
+    
+    - Considers both duration and syllable count for better matches
+    - Avoids recently used vegetables
+    - Picks from a larger pool of candidates
     
     Args:
         target_duration (int): Duration (in ms) of the original word to replace.
         cache_file (str): Path to the TTS cache JSON.
+        recent_used_limit (int): Number of recently used words to avoid
 
     Returns:
         dict: {"word": selected_word, "length_ms": duration, "file": path_to_audio}
@@ -206,20 +204,59 @@ def get_vegetable_replacement(target_duration, cache_file="tts_cache/tts_cache.j
         target_duration = int(target_duration) 
     except ValueError:
         print(f"[ERROR] Invalid target duration: {target_duration} (expected an integer)")
-        return None  # Handle gracefully to avoid a crash
+        return None
 
-    # Extract words and durations
+    # Keep track of recently used vegetables (initialize if not exists)
+    if not hasattr(get_vegetable_replacement, "recent_used"):
+        get_vegetable_replacement.recent_used = []
+
+    # Extract words and durations, excluding recently used ones
     candidates = []
     for word, data in cache.items():
-        word_duration = int(data["length_ms"])  # Ensure durations are integers
-        candidates.append((word, word_duration, data["file"]))
+        if word in get_vegetable_replacement.recent_used:
+            continue
+        
+        word_duration = int(data["length_ms"])
+        # Get syllable count from VEGETABLE_SYLLABLES
+        syllables = VEGETABLE_SYLLABLES.get(word, 1)
+        candidates.append((word, word_duration, syllables, data["file"]))
 
-    # Sort by duration difference
-    candidates.sort(key=lambda x: abs(x[1] - target_duration))
+    if not candidates:
+        # If all words were recently used, clear history and try again
+        get_vegetable_replacement.recent_used = []
+        return get_vegetable_replacement(target_duration, cache_file)
 
-    # Pick from the 3 closest words
-    best_matches = candidates[:3]
-    chosen_word, chosen_duration, chosen_file = random.choice(best_matches)
+    # Score candidates based on duration difference and syllable count
+    # We'll get the syllable count of the original word from the cache
+    target_syllables = 2  # Default to 2 syllables if unknown
+    
+    scored_candidates = []
+    for word, duration, syllables, file in candidates:
+        # Calculate duration score (0 to 1, where 1 is perfect match)
+        duration_diff = abs(duration - target_duration)
+        max_diff = max(target_duration, 1000)  # Cap at 1 second difference
+        duration_score = 1 - (duration_diff / max_diff)
+        
+        # Calculate syllable score (0 to 1, where 1 is perfect match)
+        syllable_diff = abs(syllables - target_syllables)
+        syllable_score = 1 - (syllable_diff / 4)  # Assume max syllable difference of 4
+        
+        # Combined score (weight duration more heavily)
+        total_score = (duration_score * 0.7) + (syllable_score * 0.3)
+        
+        scored_candidates.append((word, duration, file, total_score))
+
+    # Sort by score and take top 5 candidates
+    scored_candidates.sort(key=lambda x: x[3], reverse=True)
+    best_matches = scored_candidates[:5]
+
+    # Randomly choose from the best matches
+    chosen_word, chosen_duration, chosen_file, _ = random.choice(best_matches)
+
+    # Update recently used list
+    get_vegetable_replacement.recent_used.append(chosen_word)
+    if len(get_vegetable_replacement.recent_used) > recent_used_limit:
+        get_vegetable_replacement.recent_used.pop(0)
 
     return {
         "word": chosen_word,

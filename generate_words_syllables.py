@@ -4,9 +4,9 @@ import argparse
 import openai
 from pydub import AudioSegment
 import syllapy
+from audio_processor import detect_silence
 
 CACHE_DIR = "tts_cache"
-CACHE_FILE = os.path.join(CACHE_DIR, "tts_cache.json")
 
 def load_existing_word_lists(filename='word_lists.json'):
     """Load existing swear words and vegetable words from the JSON file."""
@@ -46,8 +46,23 @@ def generate_word_lists(filename='word_lists.json'):
     new_vegs = get_input_words("Enter additional vegetable words (or press Enter to keep existing):")
     combined_veg_words = list(set(existing_veg_words + new_vegs))
 
-    # Recalculate syllable counts
-    vegetables = [{"word": veg, "syllables": syllapy.count(veg)} for veg in combined_veg_words]
+    # Create or update vegetable entries
+    vegetables = []
+    for veg in combined_veg_words:
+        # Find existing entry to preserve any existing data
+        existing_entry = next((item for item in existing_vegs if item['word'] == veg), None)
+        if existing_entry:
+            # Ensure file_path exists in existing entries
+            if 'file_path' not in existing_entry:
+                existing_entry['file_path'] = os.path.join(CACHE_DIR, f"{veg}.mp3")
+            vegetables.append(existing_entry)
+        else:
+            vegetables.append({
+                "word": veg,
+                "syllables": syllapy.count(veg),
+                "duration": None,  # Will be set when TTS is generated
+                "file_path": os.path.join(CACHE_DIR, f"{veg}.mp3")
+            })
 
     # Save updated lists
     updated_word_lists = {"swear_words": combined_swears, "vegetables": vegetables}
@@ -57,35 +72,57 @@ def generate_word_lists(filename='word_lists.json'):
     
     return updated_word_lists
 
-def generate_tts_cache(word_list_file='word_lists.json', voice="alloy", regen_tts=False):
+def generate_tts(word_list_file='word_lists.json', voice="alloy", regen_tts=False):
     """
-    Generates or loads cached TTS files.
+    Generates TTS files and updates word_lists.json with duration information.
     - If `regen_tts=True`, regenerates all TTS.
     - If `regen_tts=False`, only generates missing TTS.
+    - Trims silence from audio files and stores trimmed durations.
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
 
     # Load word lists
     with open(word_list_file, 'r') as f:
         data = json.load(f)
-    vegetables = data.get('vegetables', [])
+    vegetables = data['vegetables']
 
-    # Load existing cache
-    existing_cache = {}
-    if os.path.exists(CACHE_FILE):
-        with open(CACHE_FILE, "r") as f:
-            existing_cache = json.load(f)
+    # Count how many TTS files need to be generated
+    to_generate = []
+    for veg_entry in vegetables:
+        veg = veg_entry['word']
+        tts_file = veg_entry['file_path']
+        if regen_tts or not os.path.exists(tts_file) or veg_entry.get('duration') is None:
+            to_generate.append(veg)
 
-    cache = {}
+    if not to_generate:
+        print("[INFO] No TTS files need to be generated.")
+        return
 
-    for veg_data in vegetables:
-        veg = veg_data['word']
-        syllables = veg_data['syllables']
-        tts_file = os.path.join(CACHE_DIR, f"{veg}.mp3")
+    # Show confirmation with cost estimate (approximately $0.015 per 1K characters)
+    total_chars = sum(len(veg) for veg in to_generate)
+    estimated_cost = (total_chars / 1000) * 0.015
+    
+    print("\nTTS Generation Summary:")
+    print(f"- Words to generate: {len(to_generate)}")
+    print(f"- Total characters: {total_chars}")
+    print(f"- Estimated cost: ${estimated_cost:.3f}")
+    print("\nWords that will be generated:")
+    for veg in to_generate:
+        print(f"- {veg}")
+    
+    confirm = input("\nWould you like to proceed? (y/N): ").lower().strip()
+    if confirm != 'y':
+        print("Operation cancelled.")
+        return
 
-        # Skip already cached files if not forcing regen
-        if not regen_tts and os.path.exists(tts_file):
-            cache[veg] = existing_cache.get(veg, {"file": tts_file})
+    # Process each vegetable
+    for veg_entry in vegetables:
+        veg = veg_entry['word']
+        tts_file = veg_entry['file_path']
+        temp_file = os.path.join(CACHE_DIR, f"{veg}_temp.mp3")
+
+        # Skip if TTS exists and not forcing regeneration
+        if not regen_tts and os.path.exists(tts_file) and veg_entry.get('duration') is not None:
             print(f"[CACHE] Using cached TTS for '{veg}'")
             continue
 
@@ -99,40 +136,45 @@ def generate_tts_cache(word_list_file='word_lists.json', voice="alloy", regen_tt
                 input=veg
             )
 
-            # Save the audio file
-            with open(tts_file, "wb") as f:
+            # Save to temporary file first
+            with open(temp_file, "wb") as f:
                 f.write(response.read())
 
-            # Load audio to get duration
-            audio = AudioSegment.from_file(tts_file)
-            length_ms = len(audio)
+            # Load audio, detect silence, and trim
+            audio = AudioSegment.from_file(temp_file)
+            start, end = detect_silence(audio)
+            trimmed_audio = audio[start:end]
 
-            # Save metadata
-            cache[veg] = {
-                "syllables": syllables,
-                "length_ms": length_ms,
-                "file": tts_file
-            }
-            print(f"[INFO] Saved {veg} TTS ({length_ms} ms)")
+            # Save the trimmed version as the final file
+            trimmed_audio.export(tts_file, format="mp3")
+
+            # Update entry with trimmed duration
+            veg_entry['duration'] = len(trimmed_audio)
+            print(f"[INFO] Saved {veg} TTS (trimmed duration: {len(trimmed_audio)}ms)")
+
+            # Clean up temporary file
+            os.remove(temp_file)
 
         except Exception as e:
             print(f"[ERROR] Failed to generate TTS for '{veg}': {e}")
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
 
-    # Save updated cache
-    with open(CACHE_FILE, "w") as f:
-        json.dump(cache, f, indent=2)
-    print(f"[INFO] TTS cache updated at {CACHE_FILE}")
+    # Save updated word lists
+    with open(word_list_file, "w") as f:
+        json.dump(data, f, indent=2)
+    print(f"[INFO] Word lists updated with TTS information")
 
 def main():
-    parser = argparse.ArgumentParser(description="Generate or update word lists and TTS cache.")
+    parser = argparse.ArgumentParser(description="Generate or update word lists and TTS files.")
     parser.add_argument("--regen-tts", action="store_true", help="Regenerate all TTS audio instead of using cache.")
     args = parser.parse_args()
 
     # Update word lists
     generate_word_lists("word_lists.json")
 
-    # Generate TTS cache (only regen if flag is provided)
-    generate_tts_cache(regen_tts=args.regen_tts)
+    # Generate TTS and update durations
+    generate_tts(regen_tts=args.regen_tts)
 
 if __name__ == "__main__":
     main()
