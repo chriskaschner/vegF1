@@ -2463,6 +2463,7 @@ dependencies = [
     { name = "pydub" },
     { name = "ruff" },
     { name = "syllapy" },
+    { name = "tqdm" },
     { name = "whisperx" },
     { name = "yt-dlp" },
 ]
@@ -2477,6 +2478,7 @@ requires-dist = [
     { name = "pydub", specifier = ">=0.25.1" },
     { name = "ruff", specifier = ">=0.9.7" },
     { name = "syllapy", specifier = ">=0.7.2" },
+    { name = "tqdm", specifier = ">=4.66.2" },
     { name = "whisperx", specifier = ">=3.3.1" },
     { name = "yt-dlp", specifier = ">=2025.2.19" },
 ]

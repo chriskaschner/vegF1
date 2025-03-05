@@ -13,6 +13,7 @@ dependencies = [
     "pydub>=0.25.1",
     "ruff>=0.9.7",
     "syllapy>=0.7.2",
+    "tqdm>=4.66.2",
     "whisperx>=3.3.1",
     "yt-dlp>=2025.2.19",
 ]

@@ -11,10 +11,14 @@ import tempfile
 import openai
 from audio_processor import replace_audio_segments
 import argparse
+from tqdm import tqdm
+import time
 
-
-# Set OpenAI API Key from environment variable
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Load word lists from word_lists.json
+with open('word_lists.json', 'r') as f:
+    data = json.load(f)
+    SWEAR_WORDS = data.get('swear_words', [])
+    VEGETABLE_SYLLABLES = {item['word']: item['syllables'] for item in data.get('vegetables', [])}
 
 CACHE_DIR = "tts_cache"
 CACHE_FILE = os.path.join(CACHE_DIR, "tts_cache.json")
@@ -60,10 +64,12 @@ def download_video(url, output_dir='videos', archive_file='download_archive.txt'
         'outtmpl': output_template,  # Output filename template
         'merge_output_format': 'mp4',  # Ensure final file is MP4
         'download_archive': archive_file,  # Avoid re-downloading
+        'progress_hooks': [lambda d: update_progress_bar(d, pbar)],
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        ydl.download([url])
+    with tqdm(total=100, desc="Downloading video", unit="%") as pbar:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
 
     if os.path.exists(output_template):
         print(f"[INFO] Downloaded and saved video: {output_template}")
@@ -71,6 +77,21 @@ def download_video(url, output_dir='videos', archive_file='download_archive.txt'
 
     raise FileNotFoundError(f"[ERROR] Failed to download video {video_id} in MP4 format.")
 
+def update_progress_bar(d, pbar):
+    """Update the progress bar for video download."""
+    if d['status'] == 'downloading':
+        try:
+            total = d.get('total_bytes', 0)
+            downloaded = d.get('downloaded_bytes', 0)
+            if total > 0:
+                percentage = (downloaded / total) * 100
+                pbar.n = percentage
+                pbar.refresh()
+        except:
+            pass
+    elif d['status'] == 'finished':
+        pbar.n = 100
+        pbar.refresh()
 
 def extract_audio(video_file, audio_dir='audio'):
     os.makedirs(audio_dir, exist_ok=True)
@@ -82,8 +103,28 @@ def extract_audio(video_file, audio_dir='audio'):
         print(f"{audio_file} already exists. Skipping audio extraction.")
         return audio_file
 
+    # Get video duration for progress bar
+    cmd = ['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', video_file]
+    duration = float(subprocess.check_output(cmd).decode().strip())
+    
+    # Start ffmpeg process
     cmd = ['ffmpeg', '-i', video_file, '-q:a', '0', '-map', 'a', audio_file]
-    subprocess.run(cmd, check=True)
+    process = subprocess.Popen(cmd, stderr=subprocess.PIPE, universal_newlines=True)
+    
+    # Create progress bar
+    with tqdm(total=100, desc="Extracting audio", unit="%") as pbar:
+        start_time = time.time()
+        while process.poll() is None:
+            elapsed = time.time() - start_time
+            progress = min(100, (elapsed / duration) * 100)
+            pbar.n = progress
+            pbar.refresh()
+            time.sleep(0.1)
+    
+    process.wait()
+    if process.returncode != 0:
+        raise subprocess.CalledProcessError(process.returncode, cmd)
+    
     print("Audio extraction complete.")
     return audio_file
 
@@ -95,21 +136,31 @@ def transcribe_audio(audio_file, device="cpu", language="en"):
     # Force compute_type to "float32" on CPU
     compute_type = "float32" if device == "cpu" else "float16"
 
-    # Load WhisperX model with the specified compute type and language
-    model = whisperx.load_model("base", device=device, compute_type=compute_type)
+    # Create progress bar for model loading
+    with tqdm(total=2, desc="Loading models", unit="model") as pbar:
+        # Load WhisperX model with the specified compute type and language
+        model = whisperx.load_model("base", device=device, compute_type=compute_type)
+        pbar.update(1)
+        
+        # Explicitly specify the language for alignment model
+        align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
+        pbar.update(1)
 
-    # Transcribe audio (explicitly specifying English)
-    result = model.transcribe(audio_file, language=language)
+    # Create progress bar for transcription
+    with tqdm(total=100, desc="Transcribing audio", unit="%") as pbar:
+        # Transcribe audio (explicitly specifying English)
+        result = model.transcribe(audio_file, language=language)
+        pbar.update(100)  # Update to 100% when transcription is complete
 
-    # Explicitly specify the language for alignment model
-    align_model, metadata = whisperx.load_align_model(language_code=language, device=device)
-
-    # Align words with timestamps (forcing English)
-    result_aligned = whisperx.align(result["segments"], align_model, metadata, audio_file, device=device)
+    # Create progress bar for alignment
+    with tqdm(total=100, desc="Aligning words", unit="%") as pbar:
+        # Align words with timestamps (forcing English)
+        result_aligned = whisperx.align(result["segments"], align_model, metadata, audio_file, device=device)
+        pbar.update(100)  # Update to 100% when alignment is complete
 
     return result_aligned["segments"]
 
-def save_transcript(segments, filename="transcript.txt", replacement_log="replacements_log.txt", replacements=[]):
+def save_transcript(segments, audio_file, filename="transcript.txt", replacement_log="replacements_log.txt", replacements=[]):
     """
     Save:
     - A clean transcript from the transcription segments.
@@ -117,6 +168,7 @@ def save_transcript(segments, filename="transcript.txt", replacement_log="replac
 
     Args:
         segments (list): Transcription segments from WhisperX.
+        audio_file (str): Path to the audio file to process.
         filename (str): Standard transcript file.
         replacement_log (str): File with replacement details.
         replacements (list): List of tuples (start_ms, end_ms, original_word, replacement_word, replacement_start, replacement_end).
@@ -133,7 +185,7 @@ def save_transcript(segments, filename="transcript.txt", replacement_log="replac
     
     # Generate properly synced audio with playback speed adjustment and offset
     synced_audio, replacements_log = replace_audio_segments(
-        audio_path,
+        audio_file,
         segments,
         swear_words=SWEAR_WORDS,
         get_replacement_fn=get_vegetable_replacement,
@@ -158,20 +210,6 @@ def save_transcript(segments, filename="transcript.txt", replacement_log="replac
 # ========================
 # Text Processing Section
 # ========================
-
-def load_word_lists_with_syllables(filename='word_lists.json'):
-    """
-    Load swear words and vegetables (with syllable counts) from a JSON file.
-    """
-    with open(filename, 'r') as f:
-        data = json.load(f)
-    swear_words = data.get('swear_words', [])
-    # Create a dictionary mapping each vegetable to its syllable count.
-    vegetable_syllables = {item['word']: item['syllables'] for item in data.get('vegetables', [])}
-    return swear_words, vegetable_syllables
-
-# Load the word lists from the JSON file.
-SWEAR_WORDS, VEGETABLE_SYLLABLES = load_word_lists_with_syllables()
 
 def get_syllable_count(word):
     """For swear words, we calculate the syllable count on the fly using syllapy."""
@@ -445,24 +483,7 @@ def merge_audio_video(video_file, new_audio_file, output_video='final_output.mp4
     temp_output = os.path.splitext(output_video)[0] + "_temp.mp4"
 
     # First command: Create a QuickTime-compatible MP4 with original video and new audio
-    cmd = [
-        'ffmpeg',
-        '-y',  # Overwrite without asking
-        '-i', video_file,  # Input: Original video
-        '-i', new_audio_file,  # Input: New audio
-        '-map', '0:v:0',  # Take video from first input
-        '-map', '1:a:0',  # Take audio from second input
-        '-c:v', 'h264',  # Force H.264 codec for video
-        '-profile:v', 'high',  # High profile H.264
-        '-pix_fmt', 'yuv420p',  # Standard pixel format
-        '-c:a', 'aac',  # AAC audio codec
-        '-b:a', '192k',  # Audio bitrate
-        '-ac', '2',  # Stereo audio
-        '-ar', '44100',  # Standard audio sample rate
-        '-shortest',  # Duration of shortest input
-        '-movflags', '+faststart',  # Enable fast start for streaming
-        temp_output  # Temporary output file
-    ]
+    cmd = ['ffmpeg', '-y', '-i', video_file, '-i', new_audio_file, '-map', '0:v:0', '-map', '1:a:0', '-c:v', 'h264', '-profile:v', 'high', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '192k', '-ac', '2', '-ar', '44100', '-shortest', '-movflags', '+faststart', temp_output]
 
     print(f"[INFO] Running first FFmpeg command:\n{' '.join(cmd)}")
     try:
@@ -501,45 +522,52 @@ def merge_audio_video(video_file, new_audio_file, output_video='final_output.mp4
 # Main Execution Section
 # ========================
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Download and process YouTube video')
+def main():
+    parser = argparse.ArgumentParser(description='Process a YouTube video to replace swear words with vegetables.')
     parser.add_argument('url', help='YouTube video URL')
-    parser.add_argument('--debug', action='store_true', help='Enable debug output')
+    parser.add_argument('--device', default='cpu', help='Device to use for transcription (cpu or cuda)')
+    parser.add_argument('--language', default='en', help='Language code for transcription (default: en)')
     args = parser.parse_args()
 
-    video_path = download_video(args.url)
-    audio_path = extract_audio(video_path)
-    segments = transcribe_audio(audio_path)
+    try:
+        # Create a progress bar for the overall process
+        with tqdm(total=5, desc="Overall Progress", unit="step") as pbar:
+            # Step 1: Download video
+            print("\nStep 1: Downloading video...")
+            video_file = download_video(args.url)
+            pbar.update(1)
+            pbar.set_description("Overall Progress (Downloaded video)")
 
-    save_transcript(segments, "transcript.txt")
+            # Step 2: Extract audio
+            print("\nStep 2: Extracting audio...")
+            audio_file = extract_audio(video_file)
+            pbar.update(1)
+            pbar.set_description("Overall Progress (Extracted audio)")
 
-    print("[DEBUG] Checking TTS Cache Integrity...")
-    for word, data in TTS_CACHE.items():
-        if not os.path.exists(data["file"]):
-            print(f"[ERROR] Cached TTS file missing for {word}: {data['file']}")
-        else:
-            print(f"[DEBUG] TTS Cache OK: {word} -> {data['file']} ({data['length_ms']} ms)")
+            # Step 3: Transcribe audio
+            print("\nStep 3: Transcribing audio...")
+            segments = transcribe_audio(audio_file, device=args.device, language=args.language)
+            pbar.update(1)
+            pbar.set_description("Overall Progress (Transcribed audio)")
 
-    # Extract swear word durations
-    swear_durations = extract_swear_durations(segments)
+            # Step 4: Process replacements
+            print("\nStep 4: Processing replacements...")
+            save_transcript(segments, audio_file)
+            pbar.update(1)
+            pbar.set_description("Overall Progress (Processed replacements)")
 
-    # Properly synced audio with playback speed adjustment
-    synced_audio, replacements_log = replace_audio_segments(
-        audio_path,
-        segments,
-        swear_words=SWEAR_WORDS,
-        get_replacement_fn=get_vegetable_replacement,
-        apply_stretch=True,
-        pre_replacement_offset_ms=75,
-        end_trim_ms=50,
-        debug=True
-    )
+            # Step 5: Merge audio and video
+            print("\nStep 5: Merging audio and video...")
+            merge_audio_video(video_file, "edited_audio.wav", "final_output.mp4")
+            pbar.update(1)
+            pbar.set_description("Overall Progress (Completed)")
 
-    # Debugging: Verify the generated audio file exists
-    if not os.path.exists(synced_audio):
-        raise FileNotFoundError(f"[ERROR] Edited audio file '{synced_audio}' was not created!")
+        print("\nProcessing complete! Check final_output.mp4 for the result.")
 
-    print(f"[DEBUG] Verified edited audio exists: {synced_audio}")
-    
-    final_video_synced = merge_audio_video(video_path, synced_audio, output_video='final_output_synced.mp4')
+    except Exception as e:
+        print(f"\n[ERROR] An error occurred: {str(e)}")
+        raise
+
+if __name__ == "__main__":
+    main()
 
