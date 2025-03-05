@@ -95,7 +95,7 @@ def detect_silence(audio_segment, silence_threshold=-50.0, min_silence_len=50):
 
 def replace_audio_segments(audio_path, segments, swear_words, get_replacement_fn, 
                          apply_stretch=True, pre_replacement_offset_ms=75, 
-                         end_trim_ms=50, fixed_start_offset_ms=50, crossfade_ms=50, debug=False):
+                         end_trim_ms=50, fixed_start_offset_ms=150, crossfade_ms=0, debug=False):
     """
     Replace segments of audio containing swear words with TTS-generated vegetable names.
     The replacement audio files are pre-trimmed (silence removed) during generation.
@@ -109,7 +109,7 @@ def replace_audio_segments(audio_path, segments, swear_words, get_replacement_fn
         pre_replacement_offset_ms (int): Milliseconds to offset replacement start
         end_trim_ms (int): Milliseconds to trim from end of replacements
         fixed_start_offset_ms (int): Fixed duration in ms to start replacement before swear word (default: 50ms)
-        crossfade_ms (int): Duration of crossfade between original and replacement audio (default: 50ms)
+        crossfade_ms (int): Duration of crossfade between original and replacement audio (default: 0ms)
         debug (bool): Whether to print debug information
     
     Returns:
@@ -124,121 +124,182 @@ def replace_audio_segments(audio_path, segments, swear_words, get_replacement_fn
     replacements_log = []
     
     for segment in segments:
-        if "words" not in segment:
-            continue
-            
-        for word_info in segment["words"]:
-            word = word_info["word"].lower()
-            start_ms = int(word_info["start"] * 1000)
-            end_ms = int(word_info["end"] * 1000)
-            
-            if word in swear_words:
-                # Calculate where to start the replacement
-                replacement_start = max(0, start_ms - fixed_start_offset_ms)
+        start_ms = int(segment.get("start", 0) * 1000)
+        end_ms = int(segment.get("end", 0) * 1000)
+        text = segment.get("text", "").lower()
+        
+        # First try word-level timing if available
+        if "words" in segment:
+            for word_info in segment["words"]:
+                word = word_info["word"].lower()
+                word_start_ms = int(word_info["start"] * 1000)
+                word_end_ms = int(word_info["end"] * 1000)
                 
-                # Add audio up to the crossfade point
-                if replacement_start > last_end:
-                    crossfade_point = max(last_end, replacement_start - crossfade_ms)
-                    output_audio += original_audio[last_end:crossfade_point]
-                
-                # Get replacement word data
-                # We'll use a target duration that's shorter than the gap to reduce stretching
-                available_duration = end_ms - replacement_start
-                target_duration = min(available_duration, available_duration * 0.8)  # Use 80% of available time
-                replacement_data = get_replacement_fn(target_duration)
-                
-                if not replacement_data:
-                    if debug:
-                        print(f"[WARNING] No replacement found for '{word}' ({target_duration}ms)")
-                    continue
-                
-                # Load replacement audio (already trimmed)
-                try:
-                    replacement_audio = AudioSegment.from_file(replacement_data["file"])
+                if word in swear_words:
+                    # Calculate where to start the replacement
+                    replacement_start = max(0, word_start_ms - fixed_start_offset_ms)
                     
-                    # Apply time stretching if needed, but only if it won't distort too much
-                    if apply_stretch:
-                        current_duration = len(replacement_audio)
-                        stretch_ratio = target_duration / current_duration
-                        
-                        # Only stretch if the ratio is reasonable (between 0.5 and 1.5)
-                        if 0.5 <= stretch_ratio <= 1.5:
-                            replacement_audio = time_stretch_audio(replacement_audio, target_duration)
-                        elif debug:
-                            print(f"[INFO] Skipping time-stretch for '{word}' (ratio {stretch_ratio:.2f} too extreme)")
-                    
-                    # Apply fade in/out to smooth transitions
-                    fade_duration = min(crossfade_ms, len(replacement_audio) // 4)
-                    replacement_audio = replacement_audio.fade_in(fade_duration).fade_out(fade_duration)
-                    
-                    # Create crossfade with original audio at the start
+                    # Add audio up to the replacement start
                     if replacement_start > last_end:
-                        crossfade_segment = original_audio[replacement_start - crossfade_ms:replacement_start]
-                        if len(crossfade_segment) >= crossfade_ms:
-                            # Crossfade the beginning
-                            output_audio = output_audio.append(replacement_audio, 
-                                                            crossfade=min(crossfade_ms, 
-                                                                        len(crossfade_segment),
-                                                                        len(replacement_audio)))
-                        else:
-                            # If not enough audio for crossfade, just append
-                            output_audio += replacement_audio
-                    else:
-                        # If we're starting at the beginning or overlapping, just append
+                        output_audio += original_audio[last_end:replacement_start]
+                    
+                    # Get replacement word data
+                    available_duration = word_end_ms - replacement_start
+                    target_duration = min(available_duration, available_duration * 0.8)  # Use 80% of available time
+                    replacement_data = get_replacement_fn(target_duration)
+                    
+                    if not replacement_data:
+                        if debug:
+                            print(f"[WARNING] No replacement found for '{word}' ({target_duration}ms)")
+                        continue
+                    
+                    # Load replacement audio (already trimmed)
+                    try:
+                        replacement_audio = AudioSegment.from_file(replacement_data["file"])
+                        
+                        # Apply time stretching if needed, but only if it won't distort too much
+                        if apply_stretch:
+                            current_duration = len(replacement_audio)
+                            stretch_ratio = target_duration / current_duration
+                            
+                            # Only stretch if the ratio is reasonable (between 0.5 and 1.5)
+                            if 0.5 <= stretch_ratio <= 1.5:
+                                replacement_audio = time_stretch_audio(replacement_audio, target_duration)
+                            elif debug:
+                                print(f"[INFO] Skipping time-stretch for '{word}' (ratio {stretch_ratio:.2f} too extreme)")
+                        
+                        # Apply fade in/out to smooth transitions
+                        fade_duration = min(50, len(replacement_audio) // 4)  # Keep a small fade for smoothness
+                        replacement_audio = replacement_audio.fade_in(fade_duration).fade_out(fade_duration)
+                        
+                        # Append the replacement audio
                         output_audio += replacement_audio
+                        
+                        # Log the replacement
+                        replacements_log.append({
+                            "original_word": word,
+                            "replacement_word": replacement_data["word"],
+                            "original_start": word_start_ms,
+                            "original_end": word_end_ms,
+                            "original_duration": word_end_ms - word_start_ms,
+                            "replacement_start": len(output_audio) - len(replacement_audio),
+                            "replacement_end": len(output_audio),
+                            "replacement_duration": len(replacement_audio),
+                            "available_duration": available_duration,
+                            "target_duration": target_duration,
+                            "crossfade_duration": 0
+                        })
+                        
+                        if debug:
+                            print(f"[DEBUG] Replaced '{word}' with '{replacement_data['word']}'")
+                            print(f"[DEBUG] Original duration: {word_end_ms - word_start_ms}ms")
+                            print(f"[DEBUG] Available duration: {available_duration}ms")
+                            print(f"[DEBUG] Target duration: {target_duration}ms")
+                            print(f"[DEBUG] Final duration: {len(replacement_audio)}ms")
+                            print(f"[DEBUG] Crossfade duration: 0ms")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Failed to process replacement for '{word}': {e}")
+                        # In case of error, keep the original audio
+                        output_audio += original_audio[word_start_ms:word_end_ms]
                     
-                    # Log the replacement
-                    replacements_log.append({
-                        "original_word": word,
-                        "replacement_word": replacement_data["word"],
-                        "original_start": start_ms,
-                        "original_end": end_ms,
-                        "original_duration": end_ms - start_ms,
-                        "replacement_start": len(output_audio) - len(replacement_audio),
-                        "replacement_end": len(output_audio),
-                        "replacement_duration": len(replacement_audio),
-                        "available_duration": available_duration,
-                        "target_duration": target_duration,
-                        "crossfade_duration": fade_duration
-                    })
+                    last_end = word_end_ms
+        
+        # If no word-level timing or no swear words found, check the segment text
+        else:
+            # Check if any swear words are in the segment text
+            found_swear = False
+            for swear in swear_words:
+                if swear in text:
+                    found_swear = True
+                    # Calculate where to start the replacement
+                    replacement_start = max(0, start_ms - fixed_start_offset_ms)
                     
-                    if debug:
-                        print(f"[DEBUG] Replaced '{word}' with '{replacement_data['word']}'")
-                        print(f"[DEBUG] Original duration: {end_ms - start_ms}ms")
-                        print(f"[DEBUG] Available duration: {available_duration}ms")
-                        print(f"[DEBUG] Target duration: {target_duration}ms")
-                        print(f"[DEBUG] Final duration: {len(replacement_audio)}ms")
-                        print(f"[DEBUG] Crossfade duration: {fade_duration}ms")
+                    # Add audio up to the replacement start
+                    if replacement_start > last_end:
+                        output_audio += original_audio[last_end:replacement_start]
                     
-                except Exception as e:
-                    print(f"[ERROR] Failed to process replacement for '{word}': {e}")
-                    # In case of error, keep the original audio
-                    output_audio += original_audio[start_ms:end_ms]
-                
-                last_end = end_ms
+                    # Get replacement word data
+                    available_duration = end_ms - replacement_start
+                    target_duration = min(available_duration, available_duration * 0.8)  # Use 80% of available time
+                    replacement_data = get_replacement_fn(target_duration)
+                    
+                    if not replacement_data:
+                        if debug:
+                            print(f"[WARNING] No replacement found for '{swear}' ({target_duration}ms)")
+                        continue
+                    
+                    # Load replacement audio (already trimmed)
+                    try:
+                        replacement_audio = AudioSegment.from_file(replacement_data["file"])
+                        
+                        # Apply time stretching if needed, but only if it won't distort too much
+                        if apply_stretch:
+                            current_duration = len(replacement_audio)
+                            stretch_ratio = target_duration / current_duration
+                            
+                            # Only stretch if the ratio is reasonable (between 0.5 and 1.5)
+                            if 0.5 <= stretch_ratio <= 1.5:
+                                replacement_audio = time_stretch_audio(replacement_audio, target_duration)
+                            elif debug:
+                                print(f"[INFO] Skipping time-stretch for '{swear}' (ratio {stretch_ratio:.2f} too extreme)")
+                        
+                        # Apply fade in/out to smooth transitions
+                        fade_duration = min(50, len(replacement_audio) // 4)  # Keep a small fade for smoothness
+                        replacement_audio = replacement_audio.fade_in(fade_duration).fade_out(fade_duration)
+                        
+                        # Append the replacement audio
+                        output_audio += replacement_audio
+                        
+                        # Log the replacement
+                        replacements_log.append({
+                            "original_word": swear,
+                            "replacement_word": replacement_data["word"],
+                            "original_start": start_ms,
+                            "original_end": end_ms,
+                            "original_duration": end_ms - start_ms,
+                            "replacement_start": len(output_audio) - len(replacement_audio),
+                            "replacement_end": len(output_audio),
+                            "replacement_duration": len(replacement_audio),
+                            "available_duration": available_duration,
+                            "target_duration": target_duration,
+                            "crossfade_duration": 0
+                        })
+                        
+                        if debug:
+                            print(f"[DEBUG] Replaced '{swear}' with '{replacement_data['word']}'")
+                            print(f"[DEBUG] Original duration: {end_ms - start_ms}ms")
+                            print(f"[DEBUG] Available duration: {available_duration}ms")
+                            print(f"[DEBUG] Target duration: {target_duration}ms")
+                            print(f"[DEBUG] Final duration: {len(replacement_audio)}ms")
+                            print(f"[DEBUG] Crossfade duration: 0ms")
+                        
+                    except Exception as e:
+                        print(f"[ERROR] Failed to process replacement for '{swear}': {e}")
+                        # In case of error, keep the original audio
+                        output_audio += original_audio[start_ms:end_ms]
+                    
+                    last_end = end_ms
+                    break  # Only replace the first swear word found in the segment
             
+            # If no swear words found, add the original audio
+            if not found_swear:
+                if start_ms > last_end:
+                    output_audio += original_audio[last_end:start_ms]
+                output_audio += original_audio[start_ms:end_ms]
+                last_end = end_ms
+    
     # Add any remaining audio
     if last_end < len(original_audio):
         output_audio += original_audio[last_end:]
     
-    # Create final output file with AIFF format (native to macOS)
-    temp_output = tempfile.NamedTemporaryFile(delete=False, suffix='.aiff')
-    
-    # Export directly to AIFF with high quality settings
-    output_audio.export(
-        temp_output.name,
-        format='aiff',
-        parameters=[
-            "-ar", "44100",  # Sample rate
-            "-ac", "2",      # Stereo
-            "-acodec", "pcm_s16be"  # 16-bit PCM big-endian (standard for AIFF)
-        ]
-    )
+    # Save the output as WAV
+    output_audio.export("edited_audio.wav", format="wav")
     
     if debug:
-        print(f"[DEBUG] Exported audio to AIFF: {temp_output.name}")
+        print(f"[DEBUG] Exported audio to WAV: edited_audio.wav")
     
-    return temp_output.name, replacements_log
+    return "edited_audio.wav", replacements_log
 
 def update_word_lists_with_durations(word_lists_file: str = 'word_lists.json') -> None:
     """
@@ -308,6 +369,9 @@ def get_vegetable_replacement(target_duration: int, max_ratio: float = 1.6, rece
     # Initialize recent used tracking if needed
     if not hasattr(get_vegetable_replacement, "recent_used"):
         get_vegetable_replacement.recent_used = []
+
+    # Calculate target duration as 1.5x the original
+    target_duration = int(target_duration * 1.5)
 
     # Filter vegetables by duration ratio and exclude recently used
     candidates = []
