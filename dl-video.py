@@ -527,6 +527,7 @@ def main():
     parser.add_argument('url', help='YouTube video URL')
     parser.add_argument('--device', default='cpu', help='Device to use for transcription (cpu or cuda)')
     parser.add_argument('--language', default='en', help='Language code for transcription (default: en)')
+    parser.add_argument('--debug', action='store_true', help='Enable debug output')
     args = parser.parse_args()
 
     try:
