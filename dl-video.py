@@ -9,7 +9,7 @@ import whisperx
 import random
 import tempfile
 import openai
-from audio_processor import replace_audio_segments
+from timeline_processor import process_audio_with_timeline
 import argparse
 from tqdm import tqdm
 import time
@@ -60,11 +60,15 @@ def download_video(url, output_dir='videos', archive_file='download_archive.txt'
         return output_template
 
     ydl_opts = {
-        'format': 'bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]',  # Ensures H.264 + AAC
+        'format': 'bv*[ext=mp4]+ba[ext=m4a]/bv*+ba/b',  # Try MP4 first, then any format
         'outtmpl': output_template,  # Output filename template
         'merge_output_format': 'mp4',  # Ensure final file is MP4
         'download_archive': archive_file,  # Avoid re-downloading
         'progress_hooks': [lambda d: update_progress_bar(d, pbar)],
+        'postprocessors': [{  # Ensure H.264 + AAC for QuickTime compatibility
+            'key': 'FFmpegVideoConvertor',
+            'preferedformat': 'mp4',
+        }],
     }
 
     with tqdm(total=100, desc="Downloading video", unit="%") as pbar:
@@ -182,29 +186,27 @@ def save_transcript(segments, audio_file, filename="transcript.txt", replacement
             f.write(f"[{start:.2f} - {end:.2f}]: {text}\n")
 
     print(f"Transcript saved to {filename}")
-    
-    # Generate properly synced audio with playback speed adjustment and offset
-    synced_audio, replacements_log = replace_audio_segments(
-        audio_file,
-        segments,
-        swear_words=SWEAR_WORDS,
-        get_replacement_fn=get_vegetable_replacement,
-        apply_stretch=True,
-        pre_replacement_offset_ms=75,
-        end_trim_ms=50,
-        debug=True
-    )
-    
-    # Save the replacements log to a file
-    with open("replacements_log.txt", "w", encoding="utf-8") as log_file:
-        log_file.write("Original Word Replacements Log:\n")
-        log_file.write("Format: [Original Start-End] Original -> [Replacement Start-End] Replacement (Durations)\n\n")
 
-        for log in replacements_log:
-            log_file.write(f"[{log['original_start']}-{log['original_end']}ms] {log['original_word']} "
-                        f"-> [{log['replacement_start']}-{log['replacement_end']}ms] {log['replacement_word']} "
-                        f"(Original: {log['original_duration']}ms, Replacement: {log['replacement_duration']}ms)\n")
-    print("[INFO] Replacements log saved to replacements_log.txt")
+    # Process audio with timeline processor (phrase-level replacement)
+    output_audio_path, replacements_log = process_audio_with_timeline(
+        audio_path=audio_file,
+        segments=segments,
+        swear_words=SWEAR_WORDS,
+        output_path="outputs/edited_audio.wav",
+        debug=False
+    )
+
+    # Save the replacements log to a file
+    with open("outputs/replacements.log", "w", encoding="utf-8") as log_file:
+        log_file.write("Replacement Log (Timeline Processor)\n")
+        log_file.write("Format: [Original Start-End] Original Text -> Vegetables (Durations)\n\n")
+
+        for i, log in enumerate(replacements_log, 1):
+            veg_list = ", ".join(log['vegetables'])
+            log_file.write(f"{i}. [{log['original_start']}-{log['original_end']}ms] "
+                        f"\"{log['original_text']}\" -> {veg_list}\n")
+            log_file.write(f"   Duration: {log['original_duration']}ms -> {log['replacement_duration']}ms\n\n")
+    print("[INFO] Replacements log saved to outputs/replacements.log")
 
 
 # ========================
@@ -215,34 +217,42 @@ def get_syllable_count(word):
     """For swear words, we calculate the syllable count on the fly using syllapy."""
     return syllapy.count(word)
 
-def get_vegetable_replacement(target_duration, cache_file="tts_cache/tts_cache.json", recent_used_limit=5):
+def get_vegetable_replacement(target_duration, original_word=None, cache_file="word_lists.json", recent_used_limit=5):
     """
     Selects a cached TTS vegetable with improved variety and matching.
-    
+
     - Considers both duration and syllable count for better matches
     - Avoids recently used vegetables
     - Picks from a larger pool of candidates
-    
+
     Args:
         target_duration (int): Duration (in ms) of the original word to replace.
-        cache_file (str): Path to the TTS cache JSON.
+        original_word (str): The original swear word being replaced (for syllable matching).
+        cache_file (str): Path to the word lists JSON.
         recent_used_limit (int): Number of recently used words to avoid
 
     Returns:
         dict: {"word": selected_word, "length_ms": duration, "file": path_to_audio}
     """
     if not os.path.exists(cache_file):
-        raise FileNotFoundError(f"[ERROR] TTS cache file {cache_file} not found!")
+        raise FileNotFoundError(f"[ERROR] Word lists file {cache_file} not found!")
 
     with open(cache_file, "r") as f:
-        cache = json.load(f)
+        data = json.load(f)
+        vegetables = data.get('vegetables', [])
 
     # Ensure target_duration is an integer
     try:
-        target_duration = int(target_duration) 
+        target_duration = int(target_duration)
     except ValueError:
         print(f"[ERROR] Invalid target duration: {target_duration} (expected an integer)")
         return None
+
+    # Calculate target syllables from the original swear word
+    if original_word:
+        target_syllables = get_syllable_count(original_word)
+    else:
+        target_syllables = 2  # Default to 2 syllables if unknown
 
     # Keep track of recently used vegetables (initialize if not exists)
     if not hasattr(get_vegetable_replacement, "recent_used"):
@@ -250,38 +260,36 @@ def get_vegetable_replacement(target_duration, cache_file="tts_cache/tts_cache.j
 
     # Extract words and durations, excluding recently used ones
     candidates = []
-    for word, data in cache.items():
+    for veg in vegetables:
+        word = veg['word']
         if word in get_vegetable_replacement.recent_used:
             continue
-        
-        word_duration = int(data["length_ms"])
-        # Get syllable count from VEGETABLE_SYLLABLES
-        syllables = VEGETABLE_SYLLABLES.get(word, 1)
-        candidates.append((word, word_duration, syllables, data["file"]))
+
+        word_duration = int(veg.get('duration', 400))
+        syllables = veg.get('syllables', 1)
+        file_path = veg.get('file_path', '')
+        candidates.append((word, word_duration, syllables, file_path))
 
     if not candidates:
         # If all words were recently used, clear history and try again
         get_vegetable_replacement.recent_used = []
-        return get_vegetable_replacement(target_duration, cache_file)
+        return get_vegetable_replacement(target_duration, original_word, cache_file)
 
     # Score candidates based on duration difference and syllable count
-    # We'll get the syllable count of the original word from the cache
-    target_syllables = 2  # Default to 2 syllables if unknown
-    
     scored_candidates = []
     for word, duration, syllables, file in candidates:
         # Calculate duration score (0 to 1, where 1 is perfect match)
         duration_diff = abs(duration - target_duration)
         max_diff = max(target_duration, 1000)  # Cap at 1 second difference
         duration_score = 1 - (duration_diff / max_diff)
-        
+
         # Calculate syllable score (0 to 1, where 1 is perfect match)
         syllable_diff = abs(syllables - target_syllables)
         syllable_score = 1 - (syllable_diff / 4)  # Assume max syllable difference of 4
-        
+
         # Combined score (weight duration more heavily)
         total_score = (duration_score * 0.7) + (syllable_score * 0.3)
-        
+
         scored_candidates.append((word, duration, file, total_score))
 
     # Sort by score and take top 5 candidates
@@ -559,7 +567,7 @@ def main():
 
             # Step 5: Merge audio and video
             print("\nStep 5: Merging audio and video...")
-            merge_audio_video(video_file, "edited_audio.wav", "final_output.mp4")
+            merge_audio_video(video_file, "outputs/edited_audio.wav", "final_output.mp4")
             pbar.update(1)
             pbar.set_description("Overall Progress (Completed)")
 

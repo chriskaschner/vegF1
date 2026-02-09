@@ -193,4 +193,16 @@ pyrightconfig.json
 tts_cache/*
 !tts_cache/.gitkeep
 
+# Project-specific outputs
+outputs/
+archive/
+audio/
+videos/
+*.png
+*.log
+process_output.log
+download_archive.txt
+transcript.txt
+PRE_COMMIT_CHECKLIST.md
+
 # End of https://www.toptal.com/developers/gitignore/api/macos,python
